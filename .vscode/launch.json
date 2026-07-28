@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Ai-Inspector Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/extension/ai-inspector",
+        "--enable-proposed-api=undefined_publisher.ai-inspector"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/extension/ai-inspector/dist/**/*.js"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,392 @@
+:root{
+    --radius:14px;
+    --transition:.25s ease;
+}
+
+*{
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
+}
+
+body{
+
+    font-family:var(--vscode-font-family);
+
+    background:var(--vscode-sideBar-background);
+
+    color:var(--vscode-foreground);
+
+    overflow-x:hidden;
+
+}
+
+.container{
+
+    padding:18px;
+
+}
+
+/* =======================================
+   HEADER
+======================================= */
+
+.header{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:center;
+
+    margin-bottom:18px;
+
+}
+
+.logoArea{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:14px;
+
+}
+
+.logo{
+
+    width:46px;
+
+    height:46px;
+
+    border-radius:50%;
+
+    box-shadow:0 0 12px rgba(0,180,255,.25);
+
+}
+
+.logoArea h1{
+
+    font-size:22px;
+
+    font-weight:700;
+
+}
+
+.logoArea p{
+
+    margin-top:4px;
+
+    font-size:12px;
+
+    opacity:.7;
+
+}
+
+/* =======================================
+BACKEND BADGE
+======================================= */
+
+.backend{
+
+    padding:8px 16px;
+
+    border-radius:30px;
+
+    font-weight:bold;
+
+    font-size:13px;
+
+    color:white;
+
+    transition:var(--transition);
+
+}
+
+.online{
+
+    background:#16a34a;
+
+}
+
+.offline{
+
+    background:#dc2626;
+
+}
+
+/* =======================================
+CARD
+======================================= */
+
+.card{
+
+    background:var(--vscode-editor-background);
+
+    border:1px solid var(--vscode-panel-border);
+
+    border-radius:var(--radius);
+
+    padding:18px;
+
+    margin-bottom:16px;
+
+    transition:var(--transition);
+
+}
+
+.card:hover{
+
+    transform:translateY(-2px);
+
+    box-shadow:0 10px 22px rgba(0,0,0,.15);
+
+}
+
+/* =======================================
+SECTION TITLE
+======================================= */
+
+.cardTitle{
+
+    font-size:15px;
+
+    font-weight:700;
+
+    margin-bottom:15px;
+
+    color:var(--vscode-textLink-foreground);
+
+}
+
+/* =======================================
+STATUS
+======================================= */
+
+.statusRow{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    gap:25px;
+
+}
+
+.label{
+
+    font-size:12px;
+
+    opacity:.7;
+
+}
+
+.value{
+
+    margin-top:4px;
+
+    font-size:17px;
+
+    font-weight:bold;
+
+}
+
+.statusLine{
+
+    margin-top:18px;
+
+    padding:12px;
+
+    border-radius:8px;
+
+    background:var(--vscode-sideBar-background);
+
+    font-weight:600;
+
+}
+
+/* =======================================
+FILE
+======================================= */
+
+.filename{
+
+    font-size:17px;
+
+    font-weight:bold;
+
+    color:#4cc2ff;
+
+    word-break:break-all;
+
+}
+
+/* =======================================
+GRID
+======================================= */
+
+.statsGrid{
+
+    display:grid;
+
+    grid-template-columns:repeat(2,1fr);
+
+    gap:14px;
+
+}
+
+/* =======================================
+STAT CARD
+======================================= */
+
+.statCard{
+
+    background:var(--vscode-sideBar-background);
+
+    border-radius:12px;
+
+    padding:15px;
+
+    border:1px solid var(--vscode-panel-border);
+
+    transition:var(--transition);
+
+}
+
+.statCard:hover{
+
+    transform:scale(1.03);
+
+}
+
+.statLabel{
+
+    font-size:12px;
+
+    opacity:.75;
+
+    margin-bottom:8px;
+
+}
+
+.statValue{
+
+    font-size:24px;
+
+    font-weight:bold;
+
+}
+
+.success{
+
+    color:#22c55e;
+
+}
+
+/* =======================================
+ACTIVITY
+======================================= */
+
+#activityList{
+
+    list-style:none;
+
+}
+
+#activityList li{
+
+    position:relative;
+
+    margin-bottom:10px;
+
+    padding:10px 12px 10px 20px;
+
+    border-left:3px solid #3b82f6;
+
+    background:var(--vscode-sideBar-background);
+
+    border-radius:8px;
+
+    font-size:13px;
+
+    transition:var(--transition);
+
+}
+
+#activityList li:hover{
+
+    background:var(--vscode-list-hoverBackground);
+
+}
+
+/* =======================================
+SCROLLBAR
+======================================= */
+
+::-webkit-scrollbar{
+
+    width:7px;
+
+}
+
+::-webkit-scrollbar-thumb{
+
+    background:#666;
+
+    border-radius:10px;
+
+}
+
+/* =======================================
+ANIMATIONS
+======================================= */
+
+@keyframes fade{
+
+    from{
+
+        opacity:0;
+
+        transform:translateY(10px);
+
+    }
+
+    to{
+
+        opacity:1;
+
+        transform:translateY(0);
+
+    }
+
+}
+
+.card{
+
+    animation:fade .4s ease;
+
+}
+
+/* =======================================
+RESPONSIVE
+======================================= */
+
+@media(max-width:700px){
+
+    .statsGrid{
+
+        grid-template-columns:1fr;
+
+    }
+
+    .header{
+
+        flex-direction:column;
+
+        align-items:flex-start;
+
+        gap:15px;
+
+    }
+
+}

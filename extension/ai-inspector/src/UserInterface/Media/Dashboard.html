@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        http-equiv="Content-Security-Policy"
+        content="
+            default-src 'none';
+            style-src ${webview.cspSource};
+            script-src 'nonce-${nonce}';
+            img-src ${webview.cspSource} https:;
+        ">
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <link href="${styleUri}" rel="stylesheet">
+
+    <title>AI Inspector</title>
+</head>
+
+<body>
+
+<div class="container">
+
+    <!-- ===================================== -->
+    <!-- Header -->
+    <!-- ===================================== -->
+
+    <div class="header">
+
+        <div class="logoArea">
+
+            <img src="${logoUri}" class="logo">
+
+            <div>
+
+                <h1>AI Inspector</h1>
+
+                <p>Autonomous Runtime Debugging Assistant</p>
+
+            </div>
+
+        </div>
+
+        <div id="backendBadge" class="backend offline">
+            Offline
+        </div>
+
+    </div>
+
+    <!-- ===================================== -->
+    <!-- Status -->
+    <!-- ===================================== -->
+
+    <div class="card">
+
+        <div class="cardTitle">
+
+            Runtime Status
+
+        </div>
+
+        <div class="statusRow">
+
+            <div>
+
+                <div class="label">
+
+                    Current Mode
+
+                </div>
+
+                <div id="mode" class="value">
+
+                    Autonomous
+
+                </div>
+
+            </div>
+
+            <div>
+
+                <div class="label">
+
+                    Backend
+
+                </div>
+
+                <div id="backendStatus">
+
+                    Unknown
+
+                </div>
+
+            </div>
+
+        </div>
+
+        <div class="statusLine">
+
+            <span id="dashboardStatus">
+
+                Initializing...
+
+            </span>
+
+        </div>
+
+    </div>
+
+    <!-- ===================================== -->
+    <!-- Current File -->
+    <!-- ===================================== -->
+
+    <div class="card">
+
+        <div class="cardTitle">
+
+            Current File
+
+        </div>
+
+        <div id="currentFile" class="filename">
+
+            None
+
+        </div>
+
+    </div>
+
+    <!-- ===================================== -->
+    <!-- Statistics -->
+    <!-- ===================================== -->
+
+    <div class="card">
+
+        <div class="cardTitle">
+
+            Statistics
+
+        </div>
+
+        <div class="statsGrid">
+
+            <div class="statCard">
+
+                <div class="statLabel">
+
+                    Errors Detected
+
+                </div>
+
+                <div class="statValue" id="errorsDetected">
+
+                    0
+
+                </div>
+
+            </div>
+
+            <div class="statCard">
+
+                <div class="statLabel">
+
+                    Auto Fixes
+
+                </div>
+
+                <div class="statValue" id="errorsFixed">
+
+                    0
+
+                </div>
+
+            </div>
+
+            <div class="statCard">
+
+                <div class="statLabel">
+
+                    Manual Fixes
+
+                </div>
+
+                <div class="statValue" id="manualFixes">
+
+                    0
+
+                </div>
+
+            </div>
+
+            <div class="statCard">
+
+                <div class="statLabel">
+
+                    Re-Runs
+
+                </div>
+
+                <div class="statValue" id="reruns">
+
+                    0
+
+                </div>
+
+            </div>
+
+            <div class="statCard">
+
+                <div class="statLabel">
+
+                    Success Rate
+
+                </div>
+
+                <div class="statValue success">
+
+                    <span id="successRate">
+
+                        0%
+
+                    </span>
+
+                </div>
+
+            </div>
+
+            <div class="statCard">
+
+                <div class="statLabel">
+
+                    AI Response
+
+                </div>
+
+                <div class="statValue">
+
+                    <span id="aiResponse">
+
+                        0 ms
+
+                    </span>
+
+                </div>
+
+            </div>
+
+            <div class="statCard">
+
+                <div class="statLabel">
+
+                    Session
+
+                </div>
+
+                <div class="statValue">
+
+                    <span id="sessionTime">
+
+                        0 min
+
+                    </span>
+
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+    <!-- ===================================== -->
+    <!-- Activity -->
+    <!-- ===================================== -->
+
+    <div class="card">
+
+        <div class="cardTitle">
+
+            Recent Activity
+
+        </div>
+
+        <ul id="activityList">
+
+            <li>No activity</li>
+
+        </ul>
+
+    </div>
+
+</div>
+
+<script
+    nonce="${nonce}"
+    src="${scriptUri}">
+</script>
+
+</body>
+
+</html>
