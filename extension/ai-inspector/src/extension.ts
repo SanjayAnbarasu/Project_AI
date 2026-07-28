@@ -375,7 +375,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 async function checkBackendHealth() {
     try {
-        const response = await fetch("http://127.0.0.1:8000/docs", { method: "GET" });
+        const response = await fetch("https://project-ai-75sc.onrender.com/docs", { method: "GET" });
         if (response.ok) {
             dashboard?.setBackendStatus("🟢 Online");
         } else {
@@ -507,7 +507,7 @@ async function sendLogToBackend(scrubbedText: string, locationPath: string, line
         const startTime = Date.now();
         updateInspectorStatus(InspectorState.Sending);
 
-        const response = await fetch('http://127.0.0.1:8000/log', {
+        const response = await fetch('https://project-ai-75sc.onrender.com/log', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -733,7 +733,7 @@ async function markLogAsFixed(logId: number, updatedTag?: string) {
     }
 
     try {
-        let url = `http://127.0.0.1:8000/logs/${logId}/apply`;
+        let url = `https://project-ai-75sc.onrender.com/logs/${logId}/apply`;
         if (updatedTag) {
             url += `?new_tag=${updatedTag}`;
         }

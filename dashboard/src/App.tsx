@@ -170,7 +170,7 @@ export default function App() {
     setLoginError('');
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/token', {
+      const response = await fetch('https://project-ai-75sc.onrender.com/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
@@ -204,17 +204,17 @@ export default function App() {
     };
 
     try {
-      const metricsRes = await fetch('http://127.0.0.1:8000/admin/metrics', { headers: authHeaders });
+      const metricsRes = await fetch('https://project-ai-75sc.onrender.com/admin/metrics', { headers: authHeaders });
       if (metricsRes.ok) {
         setMetrics(await metricsRes.json());
       } else if (metricsRes.status === 401) {
         handleLogout(); // Auto-logout if token is expired or invalid
       }
 
-      const trendRes = await fetch('http://127.0.0.1:8000/admin/error-trends', { headers: authHeaders });
+      const trendRes = await fetch('https://project-ai-75sc.onrender.com/admin/error-trends', { headers: authHeaders });
       if (trendRes.ok) setChartData(normalizeChartData(await trendRes.json()));
 
-      const logsRes = await fetch('http://127.0.0.1:8000/logs', { headers: authHeaders });
+      const logsRes = await fetch('https://project-ai-75sc.onrender.com/logs', { headers: authHeaders });
       if (logsRes.ok) setRawLogs(await logsRes.json());
     } catch (error) {
       console.error("Failed fetching telemetry data:", error);
