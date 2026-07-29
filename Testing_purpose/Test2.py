@@ -8,6 +8,7 @@ promo_code_value = 20
 
 checkout_price = apply_discount(cart_value, promo_code_value)
 
-assert checkout_price > 0, f"Fatal Error: We owe the customer money! Final price: ${checkout_price}"
+# Original: assert checkout_price > 0, f"Fatal Error: We owe the customer money! Final price: ${checkout_price}"
+discount_amount = cart_total * (discount_percent / 100)
 
 print(f"Payment processed successfully! Amount charged: ${checkout_price}")

@@ -688,6 +688,13 @@ async function sendLogToBackend(scrubbedText: string, locationPath: string, line
                     lastErrorPerFile.delete(locationPath);
                 }
             }
+        } else {
+            // Backend responded but returned no fix -- both Groq and the Ollama
+            // fallback failed or timed out. Previously this silently dropped
+            // back to Monitoring with no visible indication anything went wrong.
+            updateInspectorStatus(InspectorState.ManualMode);
+            logActivity("AI backend returned no suggestion (Groq + Ollama both failed/timed out)");
+            vscode.window.showWarningMessage("Ai-Inspector: AI backend could not generate a fix this attempt (both engines failed or timed out). Will retry on next crash detection.");
         }
     } catch (error: any) {
         updateInspectorStatus(InspectorState.BackendOffline);
@@ -720,9 +727,6 @@ async function applyFixToFile(suggestionText: string, lineNumber: number, target
             commentPrefix = "<!--";
         }
 
-        const zeroIndexedLine = Math.max(0, Math.min(lineNumber - 1, document.lineCount - 1));
-        const brokenLine = document.lineAt(zeroIndexedLine);
-
         let cleanSuggestion = suggestionText
             .replace(/```[a-zA-Z]*\r?\n?/g, '')
             .replace(/```/g, '')
@@ -745,9 +749,73 @@ async function applyFixToFile(suggestionText: string, lineNumber: number, target
         }
 
         cleanSuggestion = cleanSuggestion.trim();
-        const previousLineIndex = Math.max(0, zeroIndexedLine - 1);
+
+        // --- SCOPE SAFETY CHECK (Python) ---
+        // The model can correctly diagnose that a bug lives inside a function
+        // (e.g. apply_discount) and produce a textually-valid fix using that
+        // function's parameter names (e.g. cart_total, discount_percent),
+        // but still return a "line" number OUTSIDE that function's body --
+        // e.g. right after the call site. Inserting the fix there produces a
+        // brand new NameError, since parameters don't exist outside their
+        // function. This check re-derives the correct target line for any
+        // fix that references a known function's parameters.
+        if (langId === "python") {
+            const fullText = document.getText();
+            const allLines = fullText.split('\n');
+            const identUsedInFix = new Set<string>(cleanSuggestion.match(/\b[a-zA-Z_][a-zA-Z0-9_]*\b/g) || []);
+
+            // Find function defs and their parameter names + body line range.
+            const funcRanges: { name: string; params: Set<string>; start: number; end: number }[] = [];
+            const defRegex = /^(\s*)def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)\)/;
+            for (let i = 0; i < allLines.length; i++) {
+                const match = allLines[i].match(defRegex);
+                if (!match) continue;
+                const baseIndent = match[1].length;
+                const params = new Set<string>(
+                    match[3].split(',').map(p => p.trim().split('=')[0].trim()).filter(Boolean)
+                );
+                let end = allLines.length - 1;
+                for (let j = i + 1; j < allLines.length; j++) {
+                    const line = allLines[j];
+                    if (line.trim() === '') continue;
+                    const indent = line.length - line.trimStart().length;
+                    if (indent <= baseIndent) {
+                        end = j - 1;
+                        break;
+                    }
+                }
+                funcRanges.push({ name: match[2], params, start: i, end });
+            }
+
+            // Does the fix reference params belonging to some function?
+            for (const fn of funcRanges) {
+                const usesThisFnParams = [...identUsedInFix].some(id => fn.params.has(id));
+                if (!usesThisFnParams) continue;
+
+                const targetZeroIndexed = lineNumber - 1;
+                const isInsideThisFn = targetZeroIndexed >= fn.start && targetZeroIndexed <= fn.end;
+
+                if (!isInsideThisFn) {
+                    console.warn(
+                        `Ai-Inspector: Scope mismatch -- fix uses parameters of "${fn.name}" (${[...fn.params].join(', ')}) ` +
+                        `but target line ${lineNumber} is outside that function's body (lines ${fn.start + 1}-${fn.end + 1}). Rejecting.`
+                    );
+                    updateInspectorStatus(InspectorState.ManualMode);
+                    vscode.window.showWarningMessage(
+                        `Ai-Inspector: AI suggested a fix using "${fn.name}"'s internal parameters, but targeted a line outside that function. Skipping to avoid a new NameError -- will retry.`
+                    );
+                    return false;
+                }
+            }
+        }
+        // --- END SCOPE SAFETY CHECK ---
+
+        const zeroIndexedLineFinal = Math.max(0, Math.min(lineNumber - 1, document.lineCount - 1));
+        const brokenLineFinal = document.lineAt(zeroIndexedLineFinal);
+
+        const previousLineIndex = Math.max(0, zeroIndexedLineFinal - 1);
         const previousLineText = document.lineAt(previousLineIndex).text.trim();
-        const brokenLineTrimmed = brokenLine.text.trim();
+        const brokenLineTrimmed = brokenLineFinal.text.trim();
         const suggestionFirstLine = cleanSuggestion.split('\n')[0].trim();
 
         const alreadyApplied =
@@ -780,10 +848,10 @@ async function applyFixToFile(suggestionText: string, lineNumber: number, target
             return false;
         }
 
-        const firstNonSpace = brokenLine.firstNonWhitespaceCharacterIndex;
-        const originalIndentation = firstNonSpace === -1 ? "" : brokenLine.text.substring(0, firstNonSpace);
+        const firstNonSpace = brokenLineFinal.firstNonWhitespaceCharacterIndex;
+        const originalIndentation = firstNonSpace === -1 ? "" : brokenLineFinal.text.substring(0, firstNonSpace);
 
-        let replacementBlock = `${originalIndentation}${commentPrefix} Original: ${brokenLine.text.trim()}`;
+        let replacementBlock = `${originalIndentation}${commentPrefix} Original: ${brokenLineFinal.text.trim()}`;
         if (langId === "html") {
             replacementBlock += " -->\n";
         } else {
@@ -793,7 +861,7 @@ async function applyFixToFile(suggestionText: string, lineNumber: number, target
         const indentedFix = cleanSuggestion.split('\n').map(line => `${originalIndentation}${line}`).join('\n');
         replacementBlock += indentedFix;
 
-        edit.replace(document.uri, brokenLine.range, replacementBlock);
+        edit.replace(document.uri, brokenLineFinal.range, replacementBlock);
         const success = await vscode.workspace.applyEdit(edit);
 
         if (success) {
