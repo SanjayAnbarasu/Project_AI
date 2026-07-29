@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { exec } from 'child_process';
+import * as os from "os";
 import { WebviewDashboardProvider } from './UserInterface/WebviewDashboardProvider';
 
 // ======================================================
@@ -717,12 +718,21 @@ async function applyFixToFile(suggestionText: string, lineNumber: number, target
 
 function getDeveloperIdentity(): Promise<string> {
     return new Promise((resolve) => {
-        exec('git config user.name', (error, stdout) => {
-            if (error || !stdout.trim()) {
-                resolve("Sanjay Anbarasu");
-            } else {
+        exec("git config --global user.name", (error, stdout) => {
+
+            if (!error && stdout.trim()) {
                 resolve(stdout.trim());
+                return;
             }
+
+            const fullName =
+                process.env.USERNAME ||
+                process.env.USER ||
+                os.userInfo().username ||
+                "Unknown Developer";
+                
+            // Fallback to Windows username
+            resolve(os.userInfo().username);
         });
     });
 }
