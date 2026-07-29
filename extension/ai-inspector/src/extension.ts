@@ -339,6 +339,29 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // Command: Forget retry/fix history for the active file
+    // Use this when re-testing the same file repeatedly (e.g. during development)
+    // so old attempts from earlier test runs stop being treated as "already tried"
+    // duplicates and blocking genuinely new/correct fixes.
+    context.subscriptions.push(
+        vscode.commands.registerCommand("aiInspector.forgetFile", () => {
+            const activeEditor = vscode.window.activeTextEditor;
+            if (!activeEditor) {
+                vscode.window.showWarningMessage("Ai-Inspector: No active file to forget.");
+                return;
+            }
+            const filePath = activeEditor.document.fileName;
+            retryTracker.set(filePath, 0);
+            lastErrorPerFile.delete(filePath);
+            for (let i = fixHistory.length - 1; i >= 0; i--) {
+                if (fixHistory[i].filePath === filePath) {
+                    fixHistory.splice(i, 1);
+                }
+            }
+            vscode.window.showInformationMessage(`Ai-Inspector: Cleared retry/fix history for ${filePath.split(/[\\/]/).pop()}.`);
+        })
+    );
+
     // Command: Open / Focus Dashboard
     context.subscriptions.push(
         vscode.commands.registerCommand("aiInspector.openDashboard", () => {
@@ -732,13 +755,16 @@ async function applyFixToFile(suggestionText: string, lineNumber: number, target
             previousLineText === suggestionFirstLine;
 
         // Also reject fixes that are just cosmetic variants of something we
-        // already tried at this location (e.g. same shape, renamed variables).
-        // This is what actually stops the "17 near-identical hallucinated
-        // attempts" loop -- exact-match alone never caught it, since each new
-        // attempt used different invented names.
+        // already tried IN THE CURRENT RETRY EPISODE for this file (e.g. same
+        // shape, renamed variables). Scoped to retryTracker's current count
+        // rather than all-time fixHistory -- otherwise old entries from
+        // earlier test runs (which never get cleared) end up permanently
+        // blocking perfectly valid new fixes on the same file/line.
         const normalize = (s: string) => s.replace(/\s+/g, '').toLowerCase();
+        const currentEpisodeAttempts = retryTracker.get(targetFilePath) || 0;
         const alreadyTriedVariant = fixHistory
             .filter(r => r.filePath === targetFilePath)
+            .slice(0, currentEpisodeAttempts) // only this episode's attempts, most recent first
             .some(r => {
                 try {
                     const prior = JSON.parse(r.suggestion);
@@ -750,7 +776,7 @@ async function applyFixToFile(suggestionText: string, lineNumber: number, target
 
         if (alreadyApplied || alreadyTriedVariant) {
             updateInspectorStatus(InspectorState.ManualMode);
-            vscode.window.showWarningMessage("Ai-Inspector: Suggested fix already present or already tried at this location — skipping duplicate patch.");
+            vscode.window.showWarningMessage("Ai-Inspector: Suggested fix already present or already tried this retry cycle — skipping duplicate patch.");
             return false;
         }
 

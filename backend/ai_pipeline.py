@@ -118,38 +118,61 @@ def build_user_content(error_message: str, stack_trace: str, source_context: str
     return "\n".join(parts)
 
 
+OLLAMA_TIMEOUT_SECONDS = 15  # hard cap so a missing/slow local Ollama can't hang the request forever
+
+
 def call_ollama_fallback(error_message: str, stack_trace: str, source_context: str,
                           previous_attempts: list[str] | None = None) -> str:
     """
     BACKUP ENGINE: Runs locally if Groq API fails or internet is down.
+    Wrapped with a hard timeout since ollama.chat() has no built-in timeout --
+    without this, a missing or slow Ollama instance (e.g. on a server like
+    Render where Ollama likely isn't installed) can hang the whole request
+    indefinitely instead of failing fast.
     """
+    import threading
+
     user_content = build_user_content(error_message, stack_trace, source_context, previous_attempts)
 
     print("Attempting local fallback repair using Ollama...")
-    try:
-        response = ollama.chat(
-            model='qwen2.5-coder:1.5b',
-            messages=[
-                {'role': 'system', 'content': SYSTEM_PROMPT},
-                {'role': 'user', 'content': user_content}
-            ],
-            options={
-                "temperature": 0.0  # Keep Ollama deterministic
-            }
-        )
 
-        raw_content = response['message']['content'].strip()
+    result_holder: dict = {}
 
-        parsed = parse_and_validate_json(raw_content)
-        if parsed and validate_no_hallucinated_names(parsed["code"], source_context):
-            print("Local Ollama fallback succeeded.")
-            return raw_content
-        else:
-            print("Local Ollama returned invalid JSON or hallucinated names.")
-            return ""
+    def _run_ollama():
+        try:
+            response = ollama.chat(
+                model='qwen2.5-coder:1.5b',
+                messages=[
+                    {'role': 'system', 'content': SYSTEM_PROMPT},
+                    {'role': 'user', 'content': user_content}
+                ],
+                options={
+                    "temperature": 0.0  # Keep Ollama deterministic
+                }
+            )
+            result_holder["raw_content"] = response['message']['content'].strip()
+        except Exception as e:
+            result_holder["error"] = str(e)
 
-    except Exception as e:
-        print(f"Local Ollama fallback totally failed: {str(e)}")
+    thread = threading.Thread(target=_run_ollama, daemon=True)
+    thread.start()
+    thread.join(timeout=OLLAMA_TIMEOUT_SECONDS)
+
+    if thread.is_alive():
+        print(f"Local Ollama fallback timed out after {OLLAMA_TIMEOUT_SECONDS}s (likely not installed/running here).")
+        return ""
+
+    if "error" in result_holder:
+        print(f"Local Ollama fallback totally failed: {result_holder['error']}")
+        return ""
+
+    raw_content = result_holder.get("raw_content", "")
+    parsed = parse_and_validate_json(raw_content)
+    if parsed and validate_no_hallucinated_names(parsed["code"], source_context):
+        print("Local Ollama fallback succeeded.")
+        return raw_content
+    else:
+        print("Local Ollama returned invalid JSON or hallucinated names.")
         return ""
 
 
