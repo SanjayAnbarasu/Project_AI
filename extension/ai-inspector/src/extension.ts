@@ -482,10 +482,26 @@ function extractLineForFile(text: string, filePath: string): number | null {
 // 7. NETWORK PAYLOAD LAYER & UI INTEGRATION
 // ======================================================
 
-async function getSourceContext(filePath: string, lineNumber: number, windowSize = 15): Promise<string> {
+async function getSourceContext(filePath: string, lineNumber: number, windowSize = 40): Promise<string> {
     try {
         const uri = vscode.Uri.file(filePath);
         const document = await vscode.workspace.openTextDocument(uri);
+
+        // Small/medium files: send the whole thing so the model can trace
+        // root causes through function definitions anywhere in the file,
+        // not just near the crash line. Only fall back to a window for
+        // large files to keep the prompt a reasonable size.
+        const WHOLE_FILE_LINE_LIMIT = 400;
+        if (document.lineCount <= WHOLE_FILE_LINE_LIMIT) {
+            const zeroIndexed = Math.max(0, Math.min(lineNumber - 1, document.lineCount - 1));
+            const lines: string[] = [];
+            for (let i = 0; i < document.lineCount; i++) {
+                const marker = i === zeroIndexed ? ">>" : "  ";
+                lines.push(`${marker} ${i + 1}: ${document.lineAt(i).text}`);
+            }
+            return lines.join('\n');
+        }
+
         const zeroIndexed = Math.max(0, lineNumber - 1);
         const start = Math.max(0, zeroIndexed - windowSize);
         const end = Math.min(document.lineCount - 1, zeroIndexed + windowSize);
