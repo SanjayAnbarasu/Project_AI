@@ -482,6 +482,26 @@ function extractLineForFile(text: string, filePath: string): number | null {
 // 7. NETWORK PAYLOAD LAYER & UI INTEGRATION
 // ======================================================
 
+async function getSourceContext(filePath: string, lineNumber: number, windowSize = 15): Promise<string> {
+    try {
+        const uri = vscode.Uri.file(filePath);
+        const document = await vscode.workspace.openTextDocument(uri);
+        const zeroIndexed = Math.max(0, lineNumber - 1);
+        const start = Math.max(0, zeroIndexed - windowSize);
+        const end = Math.min(document.lineCount - 1, zeroIndexed + windowSize);
+
+        const lines: string[] = [];
+        for (let i = start; i <= end; i++) {
+            const marker = i === zeroIndexed ? ">>" : "  ";
+            lines.push(`${marker} ${i + 1}: ${document.lineAt(i).text}`);
+        }
+        return lines.join('\n');
+    } catch (err) {
+        console.error("Ai-Inspector: could not read source context:", err);
+        return "";
+    }
+}
+
 async function sendLogToBackend(scrubbedText: string, locationPath: string, lineFallback: number, deliveryTag: string) {
     try {
         const structuralLines = scrubbedText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
@@ -494,9 +514,26 @@ async function sendLogToBackend(scrubbedText: string, locationPath: string, line
         const previousSignatureKey = lastErrorPerFile.get(locationPath);
         lastErrorPerFile.set(locationPath, errorSignatureKey);
 
+        // Pull real surrounding code so the model can't invent variable names
+        // that don't exist in the file (this was the root cause of repeated
+        // hallucinated fixes like `price_per_item` / `discount_rate`).
+        const sourceContext = locationPath !== "Active Terminal Stream"
+            ? localScrub(await getSourceContext(locationPath, crashedLineNumber))
+            : "";
+
+        // Track prior failed attempts for this file so the backend can tell
+        // the model "don't repeat these" instead of starting from scratch
+        // on every retry.
+        const priorAttempts = fixHistory
+            .filter(r => r.filePath === locationPath)
+            .slice(0, MAX_RETRIES)
+            .map(r => r.suggestion);
+
         const payload = {
             error_message: primaryMessage.substring(0, 250),
             stack_trace: scrubbedText,
+            source_context: sourceContext,
+            previous_attempts: priorAttempts,
             file_path: locationPath,
             line_number: crashedLineNumber,
             repository: vscode.workspace.name || "CP_Chat_App",
@@ -678,9 +715,26 @@ async function applyFixToFile(suggestionText: string, lineNumber: number, target
             brokenLineTrimmed === suggestionFirstLine ||
             previousLineText === suggestionFirstLine;
 
-        if (alreadyApplied) {
+        // Also reject fixes that are just cosmetic variants of something we
+        // already tried at this location (e.g. same shape, renamed variables).
+        // This is what actually stops the "17 near-identical hallucinated
+        // attempts" loop -- exact-match alone never caught it, since each new
+        // attempt used different invented names.
+        const normalize = (s: string) => s.replace(/\s+/g, '').toLowerCase();
+        const alreadyTriedVariant = fixHistory
+            .filter(r => r.filePath === targetFilePath)
+            .some(r => {
+                try {
+                    const prior = JSON.parse(r.suggestion);
+                    return normalize(prior.code || "") === normalize(cleanSuggestion);
+                } catch {
+                    return normalize(r.suggestion) === normalize(cleanSuggestion);
+                }
+            });
+
+        if (alreadyApplied || alreadyTriedVariant) {
             updateInspectorStatus(InspectorState.ManualMode);
-            vscode.window.showWarningMessage("Ai-Inspector: Suggested fix already present at this location — skipping duplicate patch.");
+            vscode.window.showWarningMessage("Ai-Inspector: Suggested fix already present or already tried at this location — skipping duplicate patch.");
             return false;
         }
 

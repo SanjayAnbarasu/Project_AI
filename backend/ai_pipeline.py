@@ -1,106 +1,223 @@
 import os
+import re
+import json
 import requests
 import ollama
 from dotenv import load_dotenv
-from groq import Groq
 
 load_dotenv()
 
 # ==========================================
 # ENTERPRISE AI PIPELINE CONFIGURATION
 # ==========================================
-# Insert your Groq API key here, or set it in your system environment variables.
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+MAX_RETRIES = 3  # hard cap so a bad fix can't loop forever
 
-client = Groq(
-    api_key=GROQ_API_KEY
-)
+SYSTEM_PROMPT = """
+You are an expert automated code-repair engine. Your job is to analyze errors and provide precise fixes for languages like Python, Node.js, and React.
 
-def call_groq_fallback(error_message: str, stack_trace: str) -> str:
+CRITICAL REPAIR RULES:
+1. ROOT CAUSE ANALYSIS: Locate the true root cause. Do not just patch assert statements or print calls if the calculation before them was wrong.
+2. HANDLING NameError / ReferenceError / UNDEFINED:
+   - NEVER guess or invent function/variable names.
+   - Only use variable/function names that appear in the SOURCE CONTEXT provided below.
+   - If a variable/function is used but never defined: Provide a safe fallback definition, fix a typo, or rewrite the line to be valid in the target language, using ONLY names that already exist in context.
+3. PREVENT INFINITE REPLACEMENT LOOPS:
+   - You will be shown PREVIOUS FAILED ATTEMPTS if this is a retry. Do NOT repeat a previous attempt or a close variant of it. If you cannot find a genuinely different, correct fix, say so honestly in "code" as a comment rather than inventing new variable names.
+4. OUTPUT FORMAT:
+   - Return STRICTLY a JSON object with keys "line" (integer) and "code" (string).
+   - DO NOT wrap the output in Markdown blocks (like ```json or ```).
+
+Example Output:
+{"line": 13, "code": "const result = a + b;"}
+"""
+
+
+def parse_and_validate_json(response_text: str):
     """
-    Cloud Engine (Llama-3 via Groq): High-IQ code replacement engine.
-    Used for complex logical reasoning (like React state) where local models fail.
+    Safety Shield: Ensures the AI output is actually valid JSON with the right shape.
     """
-    if GROQ_API_KEY == "YOUR_GROQ_API_KEY_HERE" or not GROQ_API_KEY:
-        return "//\n AI Fix Engine Error :Groq API key is unconfigured. Please add your key to ai_pipeline.py"
+    clean_text = response_text.strip()
 
-    # Set up the request headers and payload for the Groq API(author Sanjay)
+    if clean_text.startswith("```json"):
+        clean_text = clean_text[7:]
+    elif clean_text.startswith("```"):
+        clean_text = clean_text[3:]
+    if clean_text.endswith("```"):
+        clean_text = clean_text[:-3]
+
+    try:
+        parsed = json.loads(clean_text.strip())
+        if "line" in parsed and "code" in parsed:
+            return parsed
+    except json.JSONDecodeError:
+        return None
+    return None
+
+
+def extract_identifiers(code: str):
+    """Pull plausible variable/function names out of a snippet of code."""
+    return set(re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", code))
+
+
+PY_KEYWORDS = {
+    "def", "return", "if", "else", "elif", "for", "while", "in", "not",
+    "and", "or", "True", "False", "None", "import", "from", "as", "print",
+    "assert", "class", "try", "except", "finally", "with", "lambda",
+}
+
+
+def validate_no_hallucinated_names(proposed_code: str, source_context: str) -> bool:
+    """
+    Semantic check: every identifier used in the proposed fix must already
+    appear somewhere in the source context (function signature, body, etc.),
+    or be a Python builtin/keyword/literal. Catches invented names like
+    'price_per_item' that were never defined anywhere in the file.
+    """
+    allowed = extract_identifiers(source_context) | PY_KEYWORDS
+    proposed_names = extract_identifiers(proposed_code)
+    # ignore obviously safe tokens: numbers already excluded by regex
+    unknown = proposed_names - allowed
+    # allow a small amount of slack for helper names the model legitimately
+    # needs to introduce (e.g. new local temp var) -- but not many at once
+    return len(unknown) <= 1
+
+
+def build_user_content(error_message: str, stack_trace: str, source_context: str,
+                        previous_attempts: list[str] | None = None) -> str:
+    parts = [
+        f"Error: {error_message}",
+        f"\nStack Trace:\n{stack_trace}",
+        f"\nSOURCE CONTEXT (only use names that appear here):\n{source_context}",
+    ]
+    if previous_attempts:
+        parts.append(
+            "\nPREVIOUS FAILED ATTEMPTS (do not repeat these or close variants):\n"
+            + "\n".join(f"- {a}" for a in previous_attempts)
+        )
+    return "\n".join(parts)
+
+
+def call_ollama_fallback(error_message: str, stack_trace: str, source_context: str,
+                          previous_attempts: list[str] | None = None) -> str:
+    """
+    BACKUP ENGINE: Runs locally if Groq API fails or internet is down.
+    """
+    user_content = build_user_content(error_message, stack_trace, source_context, previous_attempts)
+
+    print("Attempting local fallback repair using Ollama...")
+    try:
+        response = ollama.chat(
+            model='qwen2.5-coder:1.5b',
+            messages=[
+                {'role': 'system', 'content': SYSTEM_PROMPT},
+                {'role': 'user', 'content': user_content}
+            ],
+            options={
+                "temperature": 0.0  # Keep Ollama deterministic
+            }
+        )
+
+        raw_content = response['message']['content'].strip()
+
+        parsed = parse_and_validate_json(raw_content)
+        if parsed and validate_no_hallucinated_names(parsed["code"], source_context):
+            print("Local Ollama fallback succeeded.")
+            return raw_content
+        else:
+            print("Local Ollama returned invalid JSON or hallucinated names.")
+            return ""
+
+    except Exception as e:
+        print(f"Local Ollama fallback totally failed: {str(e)}")
+        return ""
+
+
+def call_groq_engine(error_message: str, stack_trace: str, source_context: str,
+                      previous_attempts: list[str] | None = None) -> str:
+    """
+    PRIMARY ENGINE: Fast, high-IQ cloud model.
+    """
+    if not GROQ_API_KEY or GROQ_API_KEY == "YOUR_GROQ_API_KEY_HERE":
+        print("Groq API key is unconfigured.")
+        return ""
+
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
 
-    #Working Prompt for groq AI(Author Sanjay)
-    system_prompt = """
-You are an advanced code-correction API. Analyze the error and the Source Code.
-
-CRITICAL INSTRUCTIONS:
-1. Determine the true root cause. If an 'assert', test, or print statement failed, the bug is NOT on that line. The bug is in the function/math that generated the wrong value higher up.
-2. Output a strictly valid JSON object with exactly two keys: "line" and "code".
-3. "line": The integer line number in the Source Code that actually needs to be replaced (e.g., the line with the bad math).
-4. "code": The functional replacement code.
-5. DO NOT output the `# Original:` or `// Original:` tag (the client handles this). DO NOT use markdown blocks (```). Output ONLY the raw JSON object.
-
-Example Output:
-{"line": 3, "code": "final_price = price - (price * (discount_percentage / 100))"}
-"""
-
-    
-    user_content = f"Error: {error_message}\n\nStack Trace:\n{stack_trace}"
+    user_content = build_user_content(error_message, stack_trace, source_context, previous_attempts)
 
     payload = {
-        # You can upgrade this to "llama3-70b-8192" if you need even more reasoning power
-        "model": "openai/gpt-oss-120b", 
+        "model": "llama-3.3-70b-versatile",
         "messages": [
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_content}
         ],
-        "temperature": 0.1 #prevent hallucination (Author Sanjay)
+        "temperature": 0.0,
+        "response_format": {"type": "json_object"}
     }
 
     try:
         response = requests.post(GROQ_URL, json=payload, headers=headers, timeout=10)
         if response.status_code == 200:
             result = response.json()
-            return result["choices"][0]["message"]["content"].strip()
+            raw_content = result["choices"][0]["message"]["content"].strip()
+
+            parsed = parse_and_validate_json(raw_content)
+            if parsed and validate_no_hallucinated_names(parsed["code"], source_context):
+                return raw_content
+            else:
+                print("Groq returned invalid JSON or hallucinated names.")
+                return ""
         else:
-            # Print to your backend terminal, but return empty to the frontend so it skips the edit
-            print(f"API Error: {response.status_code} - {response.text}")
+            print(f"Groq API Error: {response.status_code} - {response.text}")
             return ""
     except Exception as e:
-        print(f"Failed to connect: {str(e)}")
+        print(f"Groq network request failed: {str(e)}")
         return ""
 
 
-def generate_fix_suggestion(error_message: str, stack_trace: str) -> str:
+def generate_fix_suggestion(error_message: str, stack_trace: str, source_context: str,
+                             previous_attempts: list[str] | None = None) -> str:
     """
-    Primary Engine Routing: Determines which AI model handles the crash.
+    Master Router: Cloud-First, Local-Fallback.
+
+    source_context: the actual function/file snippet around the error --
+        NOT optional anymore. Without it the model hallucinates variable names.
+    previous_attempts: list of raw "code" strings already tried and rejected,
+        so the model (and the retry loop) doesn't repeat itself.
     """
-    print("Routing directly to Groq Cloud API for high-IQ processing...")
-    
-    # For this React Gauntlet test, we skip Ollama and go straight to Groq.
-    return call_groq_fallback(error_message, stack_trace)
-    
-    # -------------------------------------------------------------------------
-    # LOCAL OLLAMA PIPELINE (Commented out for the React Gauntlet test)
-    # Once you are done testing Groq, you can uncomment this block to 
-    # route basic errors to Qwen first, and use Groq only when Ollama fails.
-    # -------------------------------------------------------------------------
-    
-    # system_prompt = "..." # (Use the same strict prompt as above)
-    # user_content = f"Error: {error_message}\n\nStack Trace:\n{stack_trace}"
-    # 
-    # try:
-    #     response = ollama.chat(
-    #         model='qwen2.5-coder:1.5b',
-    #         messages=[
-    #             {'role': 'system', 'content': system_prompt},
-    #             {'role': 'user', 'content': user_content}
-    #         ]
-    #     )
-    #     return response['message']['content']
-    #     
-    # except Exception as local_exception:
-    #     print(f"Local Ollama failed: {str(local_exception)}. Swapping to Groq fallback pipeline...")
-    #     return call_groq_fallback(error_message, stack_trace)
+    print("Routing to Primary Engine (Groq Cloud API)...")
+
+    groq_result = call_groq_engine(error_message, stack_trace, source_context, previous_attempts)
+    if groq_result:
+        return groq_result
+
+    print("Groq failed. Activating Offline Backup (Ollama)...")
+    return call_ollama_fallback(error_message, stack_trace, source_context, previous_attempts)
+
+
+def repair_with_retry_cap(error_message: str, stack_trace: str, source_context: str) -> str | None:
+    """
+    Drives the extension's retry loop with a hard cap and memory of past attempts,
+    instead of calling generate_fix_suggestion blindly in an unbounded loop.
+    Returns the final validated fix, or None if it gives up after MAX_RETRIES.
+    """
+    previous_attempts: list[str] = []
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        print(f"--- Repair attempt {attempt}/{MAX_RETRIES} ---")
+        result = generate_fix_suggestion(error_message, stack_trace, source_context, previous_attempts)
+
+        if not result:
+            continue
+
+        parsed = json.loads(result)
+        previous_attempts.append(parsed["code"])
+        return result  # caller applies it, re-runs, and decides whether to retry
+
+    print(f"Giving up after {MAX_RETRIES} attempts -- flagging for human review instead of looping forever.")
+    return None

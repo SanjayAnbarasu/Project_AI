@@ -83,21 +83,7 @@ async def login(credentials: LoginRequest):
 
 @app.get("/admin/error-trends")
 def get_error_trends(session: Session = Depends(get_session)):
-    """
-    Returns error counts for a fixed business-hours window (10 AM - 7 PM, IST),
-    for today and for the same hour on the previous day, so the dashboard can
-    show a day-over-day comparison line alongside the current trend.
 
-    NOTE: "business hours" is assumed to be IST (UTC+5:30) based on the team's
-    location. If your server/team is actually in a different timezone, change
-    BUSINESS_TZ_OFFSET below.
-
-    IMPORTANT: SystemLog.timestamp uses default_factory=lambda: datetime.now(timezone.utc),
-    which is timezone-AWARE. SQLite has no native datetime type, so SQLAlchemy stores it via
-    isoformat() — which for an aware datetime includes the "+00:00" suffix. Query boundaries
-    must stay timezone-aware in UTC too, so they serialize to the same string format; a naive
-    boundary (no offset suffix) won't compare correctly against the stored "+00:00" strings.
-    """
     BUSINESS_TZ_OFFSET = timedelta(hours=5, minutes=30)  # IST
     business_tz = timezone(BUSINESS_TZ_OFFSET)
 
@@ -163,6 +149,12 @@ class LogIngestionPayload(BaseModel):
     tag: Optional[str] = "manual"
     #(Added one more field to track the developer name who is applying the fix(Author Sanjay))
     developer_name: Optional[str] = "Unknown Developer"
+    # Real surrounding source code around the crash line, sent by the extension
+    # so the model can't invent variable/function names that don't exist.
+    source_context: Optional[str] = ""
+    # Prior failed fix attempts for this file, so the model doesn't repeat
+    # itself on retries instead of converging on a correct fix.
+    previous_attempts: Optional[list[str]] = None
 
 
 # initial state of backend without endpoint connections
@@ -178,9 +170,20 @@ def ingest_log(payload: LogIngestionPayload, session: Session = Depends(get_sess
         # 1. Run server-side PII scrubbing safety net
         scrubbed_message = redact_pii(payload.error_message)
         scrubbed_stack = redact_pii(payload.stack_trace)
-        
-        # 2. Fire the AI pipeline generation step using our scrubbed data
-        ai_fix = generate_fix_suggestion(scrubbed_message, scrubbed_stack)
+        # Source context can also contain secrets (hardcoded keys, etc in the
+        # file itself), so it goes through the same scrubbing pass.
+        scrubbed_context = redact_pii(payload.source_context or "")
+
+        # 2. Fire the AI pipeline generation step using our scrubbed data.
+        # source_context grounds the model in real variable/function names so
+        # it stops hallucinating ones that don't exist in the file.
+        # previous_attempts stops it from repeating the same wrong fix on retries.
+        ai_fix = generate_fix_suggestion(
+            scrubbed_message,
+            scrubbed_stack,
+            scrubbed_context,
+            payload.previous_attempts,
+        )
         
         # 3. Persist the entry cleanly to SQLite
         new_log = SystemLog(
