@@ -1,4 +1,4 @@
-# 🤖 Project_AI: AI-Inspector
+# 🤖 Project_AI: AI Log Analytics 
 
 An enterprise-grade, real-time code repair engine and telemetry pipeline. AI-Inspector intercepts terminal crashes in VS Code, securely scrubs sensitive data, feeds context into a high-IQ LLM, and automatically patches broken code on disk while tracking everything in a rich analytics dashboard.
 
@@ -62,7 +62,7 @@ uvicorn main:app --reload --port 8000
 
 ### 2. Frontend Dashboard Setup (React + Vite)
 
-The analytics dashboard runs inside the VS Code Webview. Build it before compiling the extension.
+Build the production bundle for the extension webview to consume:
 
 ```bash
 cd ../frontend
@@ -70,13 +70,13 @@ cd ../frontend
 # Install dependencies
 npm install
 
-# Build the production bundle for the extension to consume
+# Build the production bundle
 npm run build
 ```
 
 ### 3. VS Code Extension Setup
 
-Package and install the actual VS Code extension.
+Package and install the actual VS Code extension:
 
 ```bash
 cd ../extension
@@ -95,16 +95,19 @@ vsce package
 1. Open VS Code.
 2. Go to the Extensions view (`Ctrl+Shift+X` / `Cmd+Shift+X`).
 3. Click the `...` menu at the top right of the Extensions view.
-4. Select **Install from VSIX...** and choose the `.vsix` file you just generated.
+4. Select **Install from VSIX...** and choose the generated `.vsix` file.
 
 ## 📡 API Endpoints Summary
 
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| `POST` | `/log` | Ingests tracebacks, invokes the AI repair engine, and returns a JSON patch. |
+| `POST` | `/token` | Authenticates users and generates JWT access tokens (Login). |
+| `GET` | `/admin/error-trends` | Fetches historical error trends and time-series telemetry metrics. |
+| `GET` | `/` | Health check endpoint (Read Root). |
+| `POST` | `/log` | Ingests tracebacks, scrubs PII, invokes the AI repair engine, and returns a JSON patch. |
+| `GET` | `/admin/metrics` | Computes aggregate dashboard metrics (24h errors, success rate, response time). |
 | `GET` | `/logs` | Fetches recent crash logs for telemetry display. |
-| `PATCH` | `/logs/{id}/apply` | Marks a generated patch as successfully applied by the user. |
-| `GET` | `/admin/metrics` | Computes aggregate telemetry metrics (24h errors, adoption rate). |
+| `PATCH` | `/logs/{log_id}/apply` | Marks a specific log fix as successfully applied by the developer. |
 
 ---
 **Author:** Sanjay Anbarasu
