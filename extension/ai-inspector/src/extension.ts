@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { exec } from 'child_process';
 import * as os from "os";
+import * as path from "path"; // ADDED: Used for parsing file names cleanly
 import { WebviewDashboardProvider } from './UserInterface/WebviewDashboardProvider';
 
 // ======================================================
@@ -340,9 +341,6 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     // Command: Forget retry/fix history for the active file
-    // Use this when re-testing the same file repeatedly (e.g. during development)
-    // so old attempts from earlier test runs stop being treated as "already tried"
-    // duplicates and blocking genuinely new/correct fixes.
     context.subscriptions.push(
         vscode.commands.registerCommand("aiInspector.forgetFile", () => {
             const activeEditor = vscode.window.activeTextEditor;
@@ -459,6 +457,15 @@ async function analyzeTerminalStream(rawText: string) {
             }
         }
 
+        // --- NEW: SYSTEM FILE GUARD ---
+        // Prevents the extension from auto-healing its own backend logic if an internal Python crash prints to the terminal.
+        const IGNORED_SYSTEM_FILES = ['ai_pipeline.py', 'main.py', 'database.py', 'scrubber.py', 'models.py'];
+        const fileNameOnly = determinedPath.split(/[\\/]/).pop() || "";
+        if (IGNORED_SYSTEM_FILES.includes(fileNameOnly)) {
+            console.log(`[AI-Inspector] Ignored crash in backend system file: ${fileNameOnly}`);
+            return; // Abort processing for internal files
+        }
+
         const genericFallbackMatch = cleanText.match(/line\s+(\d+)|:(\d+)(?::\d+)?/i);
         const fallbackLine = genericFallbackMatch
             ? parseInt(genericFallbackMatch[1] || genericFallbackMatch[2], 10)
@@ -510,10 +517,6 @@ async function getSourceContext(filePath: string, lineNumber: number, windowSize
         const uri = vscode.Uri.file(filePath);
         const document = await vscode.workspace.openTextDocument(uri);
 
-        // Small/medium files: send the whole thing so the model can trace
-        // root causes through function definitions anywhere in the file,
-        // not just near the crash line. Only fall back to a window for
-        // large files to keep the prompt a reasonable size.
         const WHOLE_FILE_LINE_LIMIT = 400;
         if (document.lineCount <= WHOLE_FILE_LINE_LIMIT) {
             const zeroIndexed = Math.max(0, Math.min(lineNumber - 1, document.lineCount - 1));
@@ -553,16 +556,10 @@ async function sendLogToBackend(scrubbedText: string, locationPath: string, line
         const previousSignatureKey = lastErrorPerFile.get(locationPath);
         lastErrorPerFile.set(locationPath, errorSignatureKey);
 
-        // Pull real surrounding code so the model can't invent variable names
-        // that don't exist in the file (this was the root cause of repeated
-        // hallucinated fixes like `price_per_item` / `discount_rate`).
         const sourceContext = locationPath !== "Active Terminal Stream"
             ? localScrub(await getSourceContext(locationPath, crashedLineNumber))
             : "";
 
-        // Track prior failed attempts for this file so the backend can tell
-        // the model "don't repeat these" instead of starting from scratch
-        // on every retry.
         const priorAttempts = fixHistory
             .filter(r => r.filePath === locationPath)
             .slice(0, MAX_RETRIES)
@@ -605,7 +602,6 @@ async function sendLogToBackend(scrubbedText: string, locationPath: string, line
                 vscode.window.showInformationMessage(`🤖 Auto-Healing initiated for ${locationPath} (Attempt ${effectiveRetries + 1}/${MAX_RETRIES})...`);
                 updateInspectorStatus(InspectorState.ApplyingFix);
 
-                // FIXED: Explicitly pass locationPath so it edits the target file, not whichever tab is open
                 const applied = await applyFixToFile(responseData.ai_suggestion, crashedLineNumber, locationPath);
 
                 if (applied) {
@@ -652,7 +648,6 @@ async function sendLogToBackend(scrubbedText: string, locationPath: string, line
                 );
 
                 if (userAction === "Apply Fix") {
-                    // FIXED: Explicitly pass locationPath to prevent off-target edits
                     const applied = await applyFixToFile(responseData.ai_suggestion, crashedLineNumber, locationPath);
 
                     if (applied) {
@@ -689,9 +684,6 @@ async function sendLogToBackend(scrubbedText: string, locationPath: string, line
                 }
             }
         } else {
-            // Backend responded but returned no fix -- both Groq and the Ollama
-            // fallback failed or timed out. Previously this silently dropped
-            // back to Monitoring with no visible indication anything went wrong.
             updateInspectorStatus(InspectorState.ManualMode);
             logActivity("AI backend returned no suggestion (Groq + Ollama both failed/timed out)");
             vscode.window.showWarningMessage("Ai-Inspector: AI backend could not generate a fix this attempt (both engines failed or timed out). Will retry on next crash detection.");
@@ -713,7 +705,6 @@ async function applyFixToFile(suggestionText: string, lineNumber: number, target
     }
 
     try {
-        // Explicit Target Document Resolution (prevents active tab switching bugs)
         const targetUri = vscode.Uri.file(targetFilePath);
         const document = await vscode.workspace.openTextDocument(targetUri);
 
@@ -751,20 +742,11 @@ async function applyFixToFile(suggestionText: string, lineNumber: number, target
         cleanSuggestion = cleanSuggestion.trim();
 
         // --- SCOPE SAFETY CHECK (Python) ---
-        // The model can correctly diagnose that a bug lives inside a function
-        // (e.g. apply_discount) and produce a textually-valid fix using that
-        // function's parameter names (e.g. cart_total, discount_percent),
-        // but still return a "line" number OUTSIDE that function's body --
-        // e.g. right after the call site. Inserting the fix there produces a
-        // brand new NameError, since parameters don't exist outside their
-        // function. This check re-derives the correct target line for any
-        // fix that references a known function's parameters.
         if (langId === "python") {
             const fullText = document.getText();
             const allLines = fullText.split('\n');
             const identUsedInFix = new Set<string>(cleanSuggestion.match(/\b[a-zA-Z_][a-zA-Z0-9_]*\b/g) || []);
 
-            // Find function defs and their parameter names + body line range.
             const funcRanges: { name: string; params: Set<string>; start: number; end: number }[] = [];
             const defRegex = /^(\s*)def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)\)/;
             for (let i = 0; i < allLines.length; i++) {
@@ -787,7 +769,6 @@ async function applyFixToFile(suggestionText: string, lineNumber: number, target
                 funcRanges.push({ name: match[2], params, start: i, end });
             }
 
-            // Does the fix reference params belonging to some function?
             for (const fn of funcRanges) {
                 const usesThisFnParams = [...identUsedInFix].some(id => fn.params.has(id));
                 if (!usesThisFnParams) continue;
@@ -812,27 +793,27 @@ async function applyFixToFile(suggestionText: string, lineNumber: number, target
 
         const zeroIndexedLineFinal = Math.max(0, Math.min(lineNumber - 1, document.lineCount - 1));
         const brokenLineFinal = document.lineAt(zeroIndexedLineFinal);
-
         const previousLineIndex = Math.max(0, zeroIndexedLineFinal - 1);
-        const previousLineText = document.lineAt(previousLineIndex).text.trim();
-        const brokenLineTrimmed = brokenLineFinal.text.trim();
-        const suggestionFirstLine = cleanSuggestion.split('\n')[0].trim();
+        
+        // --- FIXED: RAW STRING COMPARISON (Duplicate Shield) ---
+        // Removed .trim() so that removing spaces correctly registers as a valid code change.
+        const previousLineText = document.lineAt(previousLineIndex).text;
+        const rawBrokenLineText = brokenLineFinal.text;
+        const suggestionFirstLine = cleanSuggestion.split('\n')[0];
 
         const alreadyApplied =
-            brokenLineTrimmed === suggestionFirstLine ||
+            rawBrokenLineText === suggestionFirstLine ||
             previousLineText === suggestionFirstLine;
 
-        // Also reject fixes that are just cosmetic variants of something we
-        // already tried IN THE CURRENT RETRY EPISODE for this file (e.g. same
-        // shape, renamed variables). Scoped to retryTracker's current count
-        // rather than all-time fixHistory -- otherwise old entries from
-        // earlier test runs (which never get cleared) end up permanently
-        // blocking perfectly valid new fixes on the same file/line.
-        const normalize = (s: string) => s.replace(/\s+/g, '').toLowerCase();
+        // --- FIXED: WHITESPACE AWARE NORMALIZATION ---
+        // If the AI specifically adds "# Fixed indent", we preserve spaces during validation checks.
+        const isIndentFix = cleanSuggestion.toLowerCase().includes('fixed indent');
+        const normalize = (s: string) => isIndentFix ? s.toLowerCase() : s.replace(/\s+/g, '').toLowerCase();
+
         const currentEpisodeAttempts = retryTracker.get(targetFilePath) || 0;
         const alreadyTriedVariant = fixHistory
             .filter(r => r.filePath === targetFilePath)
-            .slice(0, currentEpisodeAttempts) // only this episode's attempts, most recent first
+            .slice(0, currentEpisodeAttempts)
             .some(r => {
                 try {
                     const prior = JSON.parse(r.suggestion);
@@ -858,7 +839,14 @@ async function applyFixToFile(suggestionText: string, lineNumber: number, target
             replacementBlock += "\n";
         }
 
-        const indentedFix = cleanSuggestion.split('\n').map(line => `${originalIndentation}${line}`).join('\n');
+        // --- FIXED: INDENTATION APPLICATION ---
+        // If it's an indentation fix, trust the AI's spacing entirely.
+        // If not, safely prepend the original indentation to keep code blocks aligned.
+        const indentedFix = cleanSuggestion.split('\n').map(line => {
+            if (isIndentFix) return line; 
+            return line.trimStart() === line ? `${originalIndentation}${line}` : line;
+        }).join('\n');
+        
         replacementBlock += indentedFix;
 
         edit.replace(document.uri, brokenLineFinal.range, replacementBlock);
@@ -895,7 +883,6 @@ function getDeveloperIdentity(): Promise<string> {
                 os.userInfo().username ||
                 "Unknown Developer";
                 
-            // Fallback to Windows username
             resolve(os.userInfo().username);
         });
     });

@@ -3,7 +3,7 @@
   "displayName": "Ai-Inspector",
   "description": "Automated Terminal Error Capture Agent",
   "publisher": "sanjayAnbarasu",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "engines": {
     "vscode": "^1.125.0"
   },
